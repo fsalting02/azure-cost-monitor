@@ -1,0 +1,232 @@
+{
+  "connectionReferences": {
+    "shared_teams": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_teams",
+      "displayName": "Microsoft Teams",
+      "iconUri": "https://connectoricons-prod.azureedge.net/releases/v1.0.1549/1.0.1549.2680/teams/icon.png",
+      "connectionParameters": {
+        "token": {
+          "type": "oauthSetting",
+          "oAuthSettings": {
+            "identityProvider": "aad",
+            "clientId": "YOUR_AAD_CLIENT_ID",
+            "scopes": [
+              "ChannelMessage.Send",
+              "Group.ReadWrite.All"
+            ],
+            "redirectMode": "Global",
+            "redirectUrl": "https://global.consent.azure-apim.net/redirect",
+            "properties": {
+              "IsFirstParty": "True"
+            }
+          }
+        }
+      }
+    },
+    "shared_office365": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_office365",
+      "displayName": "Office 365 Outlook",
+      "iconUri": "https://connectoricons-prod.azureedge.net/releases/v1.0.1549/1.0.1549.2680/office365/icon.png",
+      "connectionParameters": {
+        "token": {
+          "type": "oauthSetting",
+          "oAuthSettings": {
+            "identityProvider": "aad",
+            "clientId": "YOUR_AAD_CLIENT_ID",
+            "scopes": [
+              "Mail.Send",
+              "Mail.ReadWrite"
+            ],
+            "redirectMode": "Global",
+            "redirectUrl": "https://global.consent.azure-apim.net/redirect",
+            "properties": {
+              "IsFirstParty": "True"
+            }
+          }
+        }
+      }
+    },
+    "shared_azureloganalyticsdatacollector": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_azureloganalyticsdatacollector",
+      "displayName": "Azure Log Analytics Data Collector",
+      "iconUri": "https://connectoricons-prod.azureedge.net/releases/v1.0.1640/1.0.1640.3280/azureloganalyticsdatacollector/icon.png",
+      "connectionParameters": {
+        "username": {
+          "type": "string",
+          "uiDefinition": {
+            "displayName": "Workspace ID",
+            "description": "Your Log Analytics Workspace ID",
+            "tooltip": "Found in Azure Portal > Log Analytics Workspace > Agents > Workspace ID",
+            "constraints": {
+              "required": "true"
+            }
+          }
+        },
+        "password": {
+          "type": "securestring",
+          "uiDefinition": {
+            "displayName": "Workspace Key",
+            "description": "Your Log Analytics Primary or Secondary Key",
+            "tooltip": "Found in Azure Portal > Log Analytics Workspace > Agents > Primary Key",
+            "constraints": {
+              "required": "true"
+            }
+          }
+        }
+      }
+    },
+    "azure_resource_manager": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_arm",
+      "displayName": "Azure Resource Manager (Service Principal)",
+      "connectionParameters": {
+        "token": {
+          "type": "oauthSetting",
+          "oAuthSettings": {
+            "identityProvider": "aad",
+            "clientId": "YOUR_SERVICE_PRINCIPAL_CLIENT_ID",
+            "clientSecret": "YOUR_SERVICE_PRINCIPAL_SECRET",
+            "customParameters": {
+              "tenantId": {
+                "value": "YOUR_TENANT_ID"
+              },
+              "resourceUri": {
+                "value": "https://management.azure.com/"
+              },
+              "loginUri": {
+                "value": "https://login.windows.net"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "environment": {
+    "variables": {
+      "varSubscriptionId": {
+        "description": "Azure Subscription ID to monitor",
+        "example": "12345678-1234-1234-1234-123456789abc",
+        "required": true
+      },
+      "varThresholdMultiplier": {
+        "description": "Multiplier for anomaly detection (1.5 = 150% of baseline)",
+        "example": "1.5",
+        "required": true
+      },
+      "varCriticalThreshold": {
+        "description": "USD amount that triggers critical alerts",
+        "example": "5000",
+        "required": true
+      },
+      "varTeamsChannelId": {
+        "description": "Teams channel ID for posting alerts",
+        "example": "19:abc123def456@thread.tacv2",
+        "required": true
+      },
+      "varFinanceEmail": {
+        "description": "Email address for finance team alerts",
+        "example": "finance@company.com",
+        "required": true
+      }
+    }
+  },
+  "setupInstructions": {
+    "prerequisites": [
+      "Azure subscription with Cost Management Reader permissions",
+      "Service Principal with appropriate permissions",
+      "Microsoft Teams channel for alerts",
+      "Log Analytics workspace",
+      "Office 365 license"
+    ],
+    "steps": [
+      {
+        "step": 1,
+        "title": "Create Service Principal",
+        "commands": [
+          "az ad sp create-for-rbac --name 'CostMonitoringSP' --role 'Cost Management Reader' --scopes /subscriptions/{subscription-id}"
+        ],
+        "notes": "Save the appId (clientId) and password (clientSecret) for connection configuration"
+      },
+      {
+        "step": 2,
+        "title": "Configure Log Analytics",
+        "instructions": [
+          "Navigate to Azure Portal > Log Analytics Workspace",
+          "Go to Agents > Log Analytics agent instructions",
+          "Copy Workspace ID and Primary Key",
+          "Add these to the connection parameters"
+        ]
+      },
+      {
+        "step": 3,
+        "title": "Set Up Teams Connection",
+        "instructions": [
+          "In Power Automate, go to Data > Connections",
+          "Create new Teams connection",
+          "Authenticate with account that has access to target channel",
+          "Add bot to the channel: @mention the bot in the channel"
+        ]
+      },
+      {
+        "step": 4,
+        "title": "Configure Flow Variables",
+        "variables": [
+          "varSubscriptionId: Your Azure subscription ID",
+          "varThresholdMultiplier: 1.5 (or adjust based on needs)",
+          "varCriticalThreshold: 5000 (or your budget limit)",
+          "varTeamsChannelId: Get from Teams channel URL",
+          "varFinanceEmail: finance@yourcompany.com"
+        ]
+      },
+      {
+        "step": 5,
+        "title": "Test the Flow",
+        "instructions": [
+          "Click 'Test' in the flow editor",
+          "Choose 'Manually'",
+          "Verify all connections authenticate successfully",
+          "Check Teams channel for test message",
+          "Verify email delivery",
+          "Query Log Analytics: AzureCostAnomalies_CL | take 10"
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "azure": {
+      "servicePrincipal": {
+        "role": "Cost Management Reader",
+        "scope": "/subscriptions/{subscription-id}",
+        "permissions": [
+          "Microsoft.CostManagement/*/read",
+          "Microsoft.Consumption/*/read"
+        ]
+      }
+    },
+    "teams": {
+      "required": [
+        "ChannelMessage.Send",
+        "Group.ReadWrite.All"
+      ]
+    },
+    "office365": {
+      "required": [
+        "Mail.Send"
+      ]
+    },
+    "logAnalytics": {
+      "required": [
+        "Write access to workspace"
+      ]
+    }
+  },
+  "securityBestPractices": [
+    "Use Azure Key Vault for storing Service Principal credentials",
+    "Implement connection reference environment variables",
+    "Enable flow run history retention for audit",
+    "Use managed identities where possible",
+    "Regularly rotate Service Principal secrets",
+    "Monitor flow execution for anomalies",
+    "Implement least privilege access principle"
+  ]
+}

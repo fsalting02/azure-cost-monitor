@@ -1,0 +1,350 @@
+{
+  "name": "Azure Cost Anomaly Detection",
+  "id": "/providers/Microsoft.ProcessSimple/environments/Default-xxxxx/flows/xxxxx",
+  "type": "Microsoft.ProcessSimple/environments/flows",
+  "properties": {
+    "apiId": "/providers/Microsoft.PowerApps/apis/shared_logicflows",
+    "displayName": "Azure Cost Anomaly Detection & Alert System",
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "parameters": {
+        "$connections": {
+          "defaultValue": {},
+          "type": "Object"
+        }
+      },
+      "triggers": {
+        "Recurrence": {
+          "recurrence": {
+            "frequency": "Day",
+            "interval": 1,
+            "schedule": {
+              "hours": ["6"],
+              "minutes": [0]
+            },
+            "timeZone": "UTC"
+          },
+          "type": "Recurrence"
+        }
+      },
+      "actions": {
+        "Initialize_ThresholdMultiplier": {
+          "runAfter": {},
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "varThresholdMultiplier",
+                "type": "float",
+                "value": 1.5
+              }
+            ]
+          }
+        },
+        "Initialize_SubscriptionId": {
+          "runAfter": {
+            "Initialize_ThresholdMultiplier": ["Succeeded"]
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "varSubscriptionId",
+                "type": "string",
+                "value": "YOUR_AZURE_SUBSCRIPTION_ID"
+              }
+            ]
+          }
+        },
+        "Initialize_CriticalThreshold": {
+          "runAfter": {
+            "Initialize_SubscriptionId": ["Succeeded"]
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "varCriticalThreshold",
+                "type": "integer",
+                "value": 5000
+              }
+            ]
+          }
+        },
+        "HTTP_Get_Cost_Data": {
+          "runAfter": {
+            "Initialize_CriticalThreshold": ["Succeeded"]
+          },
+          "type": "Http",
+          "inputs": {
+            "method": "POST",
+            "uri": "https://management.azure.com/subscriptions/@{variables('varSubscriptionId')}/providers/Microsoft.CostManagement/query?api-version=2023-03-01",
+            "headers": {
+              "Content-Type": "application/json"
+            },
+            "body": {
+              "type": "ActualCost",
+              "timeframe": "Custom",
+              "timePeriod": {
+                "from": "@{addDays(utcNow(), -30)}",
+                "to": "@{utcNow()}"
+              },
+              "dataset": {
+                "granularity": "Daily",
+                "aggregation": {
+                  "totalCost": {
+                    "name": "Cost",
+                    "function": "Sum"
+                  }
+                },
+                "grouping": [
+                  {
+                    "type": "Dimension",
+                    "name": "ResourceGroup"
+                  }
+                ]
+              }
+            },
+            "authentication": {
+              "type": "ManagedServiceIdentity"
+            }
+          }
+        },
+        "Parse_JSON_Cost_Response": {
+          "runAfter": {
+            "HTTP_Get_Cost_Data": ["Succeeded"]
+          },
+          "type": "ParseJson",
+          "inputs": {
+            "content": "@body('HTTP_Get_Cost_Data')",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "array"
+                      }
+                    },
+                    "columns": {
+                      "type": "array"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "Initialize_TodayCost": {
+          "runAfter": {
+            "Parse_JSON_Cost_Response": ["Succeeded"]
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "varTodayCost",
+                "type": "float",
+                "value": "@{float(body('Parse_JSON_Cost_Response')?['properties']?['rows']?[0]?[0])}"
+              }
+            ]
+          }
+        },
+        "Initialize_Baseline": {
+          "runAfter": {
+            "Initialize_TodayCost": ["Succeeded"]
+          },
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "varBaseline",
+                "type": "float",
+                "value": 0
+              }
+            ]
+          },
+          "description": "Calculate 30-day average baseline"
+        },
+        "Calculate_Baseline_Loop": {
+          "runAfter": {
+            "Initialize_Baseline": ["Succeeded"]
+          },
+          "type": "Foreach",
+          "foreach": "@skip(body('Parse_JSON_Cost_Response')?['properties']?['rows'], 1)",
+          "actions": {
+            "Increment_Baseline": {
+              "type": "IncrementVariable",
+              "inputs": {
+                "name": "varBaseline",
+                "value": "@float(items('Calculate_Baseline_Loop')?[0])"
+              }
+            }
+          }
+        },
+        "Divide_Baseline_By_Days": {
+          "runAfter": {
+            "Calculate_Baseline_Loop": ["Succeeded"]
+          },
+          "type": "SetVariable",
+          "inputs": {
+            "name": "varBaseline",
+            "value": "@div(variables('varBaseline'), 30)"
+          }
+        },
+        "Condition_Anomaly_Detected": {
+          "runAfter": {
+            "Divide_Baseline_By_Days": ["Succeeded"]
+          },
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "greater": [
+                  "@variables('varTodayCost')",
+                  "@mul(variables('varBaseline'), variables('varThresholdMultiplier'))"
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Compose_Variance_Percent": {
+              "type": "Compose",
+              "inputs": "@sub(div(mul(sub(variables('varTodayCost'), variables('varBaseline')), 100), variables('varBaseline')), 0)"
+            },
+            "Compose_Adaptive_Card": {
+              "runAfter": {
+                "Compose_Variance_Percent": ["Succeeded"]
+              },
+              "type": "Compose",
+              "inputs": {
+                "type": "AdaptiveCard",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.4",
+                "body": [
+                  {
+                    "type": "TextBlock",
+                    "text": "⚠️ Azure Cost Anomaly Detected",
+                    "weight": "Bolder",
+                    "size": "Large",
+                    "color": "Attention"
+                  },
+                  {
+                    "type": "FactSet",
+                    "facts": [
+                      {
+                        "title": "Subscription:",
+                        "value": "@{variables('varSubscriptionId')}"
+                      },
+                      {
+                        "title": "Current Cost:",
+                        "value": "$@{variables('varTodayCost')}"
+                      },
+                      {
+                        "title": "Baseline Average:",
+                        "value": "$@{variables('varBaseline')}"
+                      },
+                      {
+                        "title": "Variance:",
+                        "value": "@{outputs('Compose_Variance_Percent')}%"
+                      }
+                    ]
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View in Azure Portal",
+                    "url": "https://portal.azure.com/#blade/Microsoft_Azure_CostManagement/Menu/costanalysis"
+                  }
+                ]
+              }
+            },
+            "Post_to_Teams": {
+              "runAfter": {
+                "Compose_Adaptive_Card": ["Succeeded"]
+              },
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_teams",
+                  "operationId": "PostCardToChannel",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams"
+                },
+                "parameters": {
+                  "poster": "Flow bot",
+                  "location": "Cloud Operations",
+                  "channelName": "Cost Alerts",
+                  "card": "@outputs('Compose_Adaptive_Card')"
+                }
+              }
+            },
+            "Send_Email": {
+              "runAfter": {
+                "Post_to_Teams": ["Succeeded"]
+              },
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_office365",
+                  "operationId": "SendEmailV2",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+                },
+                "parameters": {
+                  "emailMessage/To": "finance-team@company.com",
+                  "emailMessage/Subject": "[ALERT] Azure Spending Anomaly - $@{variables('varTodayCost')}",
+                  "emailMessage/Body": "<h2>Azure Cost Anomaly Detected</h2><p>Current cost: $@{variables('varTodayCost')}</p><p>Baseline: $@{variables('varBaseline')}</p><p>Variance: +@{outputs('Compose_Variance_Percent')}%</p>",
+                  "emailMessage/Importance": "High"
+                }
+              }
+            },
+            "Write_to_Log_Analytics": {
+              "runAfter": {
+                "Send_Email": ["Succeeded"]
+              },
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "connectionName": "shared_azureloganalyticsdatacollector",
+                  "operationId": "SendData",
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_azureloganalyticsdatacollector"
+                },
+                "parameters": {
+                  "logType": "AzureCostAnomalies",
+                  "body": {
+                    "timestamp": "@{utcNow()}",
+                    "subscriptionId": "@{variables('varSubscriptionId')}",
+                    "currentCost": "@{variables('varTodayCost')}",
+                    "baselineCost": "@{variables('varBaseline')}",
+                    "variancePercent": "@{outputs('Compose_Variance_Percent')}"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "connectionReferences": {
+      "shared_teams": {
+        "connectionName": "shared-teams-connection",
+        "source": "Invoker",
+        "id": "/providers/Microsoft.PowerApps/apis/shared_teams"
+      },
+      "shared_office365": {
+        "connectionName": "shared-office365-connection",
+        "source": "Invoker",
+        "id": "/providers/Microsoft.PowerApps/apis/shared_office365"
+      },
+      "shared_azureloganalyticsdatacollector": {
+        "connectionName": "shared-loganalytics-connection",
+        "source": "Invoker",
+        "id": "/providers/Microsoft.PowerApps/apis/shared_azureloganalyticsdatacollector"
+      }
+    }
+  }
+}
